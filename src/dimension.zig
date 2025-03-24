@@ -1,7 +1,8 @@
 const fmt = @import("std").fmt;
 const mem = @import("std").mem;
 const builtin = @import("std").builtin;
-const units = @import("./units.zig");
+
+const unit = @import("./unit.zig");
 
 const testing = @import("std").testing;
 const debug = @import("std").debug;
@@ -11,7 +12,7 @@ const debug = @import("std").debug;
 // Simplification will take units that have the same name and base and will
 // combine and replace them with a new unit of the same name and unit but with
 // the exponents added together.
-pub fn Compose(comptime u: []const units.Unit) type {
+pub fn Compose(comptime u: []const unit.Unit) type {
     comptime {
         const sortedUnits = sortUnits(u);
         const simplifiedUnits = simplifyUnits(&sortedUnits);
@@ -19,20 +20,24 @@ pub fn Compose(comptime u: []const units.Unit) type {
     }
 }
 
-pub fn Extend(comptime t: type, comptime u: []const units.Unit) type {
+// Extends the supplied units with the given list of units. This can be used to
+// add more units but also to remove units by canceling them out. The returned
+// unit will be the simplified result of adding the supplied units to the
+// supplied unit type.
+pub fn Extend(comptime t: type, comptime u: []const unit.Unit) type {
     comptime {
         return Compose(structTypeToArray(t) ++ u);
     }
 }
 
 // Converts an array of units to a tuple struct of the units
-pub fn arrayToStructType(comptime u: []const units.Unit) type {
+pub fn arrayToStructType(comptime u: []const unit.Unit) type {
     comptime {
         var fields: [u.len]builtin.Type.StructField = undefined;
         for (0..u.len) |i| {
             fields[i] = builtin.Type.StructField{
                 .name = fmt.comptimePrint("{}", .{i}),
-                .type = units.Unit,
+                .type = unit.Unit,
                 .is_comptime = true,
                 .default_value_ptr = &u[i],
                 .alignment = 8,
@@ -55,7 +60,7 @@ pub fn arrayToStructType(comptime u: []const units.Unit) type {
 pub fn structTypeToArray(comptime T: type) structTypeToArrayRetType(T) {
     comptime {
         const info = @typeInfo(T).@"struct";
-        var rv: [info.fields.len]units.Unit = undefined;
+        var rv: [info.fields.len]unit.Unit = undefined;
         for (info.fields, 0..) |iterInfo, i| {
             // This is _kinda_ a hack. All comptime fields must have a default
             // initialization value (enforced by the compiler). So by using the
@@ -78,29 +83,49 @@ fn structTypeToArrayRetType(comptime T: type) type {
                     @compileError("the supplied type was expected to be a tuple but was not");
                 }
                 for (info.fields, 0..) |iterInfo, i| {
-                    if (!mem.eql(u8, iterInfo.name, fmt.comptimePrint("{}", .{i}))) {
+                    if (!mem.eql(
+                        u8,
+                        iterInfo.name,
+                        fmt.comptimePrint("{}", .{i}),
+                    )) {
                         @compileError("the supplied type was expected to be a tuple but was not");
                     }
                     if (!iterInfo.is_comptime) {
                         @compileError("all fields of the supplied tuple must be available at comptime. Field " ++ iterInfo.name ++ " is not.");
                     }
-                    if (iterInfo.type != units.Unit) {
-                        @compileError("field " ++ iterInfo.name ++ " of the the supplied tuple must be of type " ++ @typeName(units.Unit) ++ " but it was type " ++ @typeName(iterInfo.type));
+                    if (iterInfo.type != unit.Unit) {
+                        @compileError("field " ++ iterInfo.name ++ " of the the supplied tuple must be of type " ++ @typeName(unit.Unit) ++ " but it was type " ++ @typeName(iterInfo.type));
                     }
                 }
 
-                return [info.fields.len]units.Unit;
+                return [info.fields.len]unit.Unit;
             },
-            else => @compileError("the supplied type must be a struct but was " ++ @typeName(T)),
+            else => @compileError("the supplied type must be a dimension struct but was " ++ @typeName(T)),
         }
     }
 }
 
-pub fn sortUnits(comptime u: []const units.Unit) [u.len]units.Unit {
+// Returns a string representation of the supplied composition
+pub fn format(comptime T: type) []const u8 {
+    var tUnits = structTypeToArray(T);
+    tUnits = simplifyUnits(&tUnits);
+
+    var tStr: []const u8 = "";
+    for (tUnits, 0..) |iterL, i| {
+        tStr = tStr ++ iterL.comptimePrint();
+        if (i + 1 < tUnits.len) {
+            tStr = tStr ++ " ";
+        }
+    }
+    return tStr;
+}
+
+// Sorts the supplied units by name and by base with units of the same name
+pub fn sortUnits(comptime u: []const unit.Unit) [u.len]unit.Unit {
     comptime {
-        var unitsCpy: [u.len]units.Unit = u[0..u.len].*;
+        var unitsCpy: [u.len]unit.Unit = u[0..u.len].*;
         const unitsLt = struct {
-            fn lessThan(ctx: anytype, lhs: units.Unit, rhs: units.Unit) bool {
+            fn lessThan(ctx: anytype, lhs: unit.Unit, rhs: unit.Unit) bool {
                 _ = ctx;
                 if (mem.lessThan(u8, lhs.name, rhs.name)) return true;
                 if (mem.eql(u8, lhs.name, rhs.name) and lhs.base < rhs.base) {
@@ -109,7 +134,7 @@ pub fn sortUnits(comptime u: []const units.Unit) [u.len]units.Unit {
                 return false;
             }
         }.lessThan;
-        mem.sort(units.Unit, &unitsCpy, void, unitsLt);
+        mem.sort(unit.Unit, &unitsCpy, void, unitsLt);
         return unitsCpy;
     }
 }
@@ -117,15 +142,15 @@ pub fn sortUnits(comptime u: []const units.Unit) [u.len]units.Unit {
 // Combines like units in in the supplied units slice. Units with the same name
 // and units will combined into one and their exponents will be added together.
 // This function assumes that the units slice is already sorted!
-pub fn simplifyUnits(comptime u: []const units.Unit) simplifyUnitsRetType(u) {
+pub fn simplifyUnits(comptime u: []const unit.Unit) simplifyUnitsRetType(u) {
     comptime {
         if (u.len == 0) {
-            return [0]units.Unit{};
+            return [0]unit.Unit{};
         }
 
         var cntr = 0;
-        var curUnit: units.Unit = u[0];
-        var unitsCpy: [u.len]units.Unit = u[0..u.len].*;
+        var curUnit: unit.Unit = u[0];
+        var unitsCpy: [u.len]unit.Unit = u[0..u.len].*;
         for (u[1..]) |iterUnit| {
             if (!mem.eql(u8, curUnit.name, iterUnit.name)) {
                 // If the exponent is 0 then the units "canceled out" and the
@@ -148,13 +173,13 @@ pub fn simplifyUnits(comptime u: []const units.Unit) simplifyUnitsRetType(u) {
 }
 
 // This function assumes that the units slice is already sorted!
-fn simplifyUnitsRetType(comptime u: []const units.Unit) type {
+fn simplifyUnitsRetType(comptime u: []const unit.Unit) type {
     comptime {
         if (u.len == 0) {
-            return [0]units.Unit;
+            return [0]unit.Unit;
         }
         var cntr: u64 = 0;
-        var curUnit: units.Unit = u[0];
+        var curUnit: unit.Unit = u[0];
         var runningExp: i64 = curUnit.exp;
         for (u[1..]) |iterUnit| {
             if (!mem.eql(u8, curUnit.name, iterUnit.name)) {
@@ -179,7 +204,7 @@ fn simplifyUnitsRetType(comptime u: []const units.Unit) type {
             cntr += 1;
         }
 
-        return [cntr]units.Unit;
+        return [cntr]unit.Unit;
     }
 }
 
@@ -203,91 +228,85 @@ pub fn match(comptime l: type, comptime r: type) void {
             return;
         }
 
-        var lStr: []const u8 = "";
-        var rStr: []const u8 = "";
-        for (lUnits) |iterL| {
-            lStr = lStr ++ iterL.comptimePrint() ++ " ";
-        }
-        for (rUnits) |iterR| {
-            rStr = rStr ++ iterR.comptimePrint() ++ " ";
-        }
+        const lStr = format(l);
+        const rStr = format(r);
         @compileError("Units did not match.\n" ++ lStr ++ "\ndoes not match\n" ++ rStr);
     }
 }
 
-pub fn isComposition(comptime T: type) void {
+pub fn assertIsDim(comptime T: type) void {
     _ = structTypeToArray(T);
 }
 
-pub const Unitless = Compose(&[0]units.Unit{});
+pub const Unitless = Compose(&[0]unit.Unit{});
 
 // Scientific units
-pub const Meter = Compose(&[_]units.Unit{units.meter});
-pub const Gram = Compose(&[_]units.Unit{units.gram});
-pub const Second = Compose(&[_]units.Unit{units.second});
-pub const Ampere = Compose(&[_]units.Unit{units.ampere});
-pub const Kelvin = Compose(&[_]units.Unit{units.kelvin});
-pub const Mole = Compose(&[_]units.Unit{units.mole});
-pub const Candela = Compose(&[_]units.Unit{units.candela});
+pub const Meter = Compose(&[_]unit.Unit{unit.meter});
+pub const Gram = Compose(&[_]unit.Unit{unit.gram});
+pub const Second = Compose(&[_]unit.Unit{unit.second});
+pub const Ampere = Compose(&[_]unit.Unit{unit.ampere});
+pub const Kelvin = Compose(&[_]unit.Unit{unit.kelvin});
+pub const Mole = Compose(&[_]unit.Unit{unit.mole});
+pub const Candela = Compose(&[_]unit.Unit{unit.candela});
 // Common SI units that are defined for convenience
-pub const Kilogram = Compose(&[_]units.Unit{units.kilogram});
-pub const Newton = Compose(&[_]units.Unit{
-    units.kilogram, units.meter, units.Scale(units.second, -2),
+pub const Kilogram = Compose(&[_]unit.Unit{unit.kilogram});
+pub const Newton = Compose(&[_]unit.Unit{
+    unit.kilogram, unit.meter, unit.scale(unit.second, -2),
 });
-pub const Joule = Compose(&[_]units.Unit{
-    units.kilogram, units.Scale(units.meter, 2), units.Scale(units.second, -2),
+pub const Joule = Compose(&[_]unit.Unit{
+    unit.kilogram, unit.scale(unit.meter, 2), unit.scale(unit.second, -2),
 });
 
 // Comp sci units
-pub const Byte2 = Compose(&[_]units.Unit{units.byte2});
-pub const Byte10 = Compose(&[_]units.Unit{units.byte10});
+pub const Byte2 = Compose(&[_]unit.Unit{unit.byte2});
+pub const Byte10 = Compose(&[_]unit.Unit{unit.byte10});
 
 test "array to struct type" {
-    const t1 = comptime arrayToStructType(@constCast(&[_]units.Unit{units.meter}));
+    const t1 = comptime arrayToStructType(@constCast(&[_]unit.Unit{unit.meter}));
     try testing.expectEqual(@sizeOf(t1), 0);
     try testing.expectEqual(@typeInfo(t1).@"struct".is_tuple, true);
     try testing.expectEqual(@typeInfo(t1).@"struct".fields.len, 1);
-    try testing.expectEqual(@typeInfo(t1).@"struct".fields[0].type, units.Unit);
+    try testing.expectEqual(@typeInfo(t1).@"struct".fields[0].type, unit.Unit);
     try testing.expectEqual(@typeInfo(t1).@"struct".fields[0].name, "0");
     try testing.expectEqual(@typeInfo(t1).@"struct".fields[0].is_comptime, true);
     try testing.expectEqual(
         @typeInfo(t1).@"struct".fields[0].defaultValue(),
-        units.meter,
+        unit.meter,
     );
 
     const t2 = comptime arrayToStructType(
-        @constCast(&[_]units.Unit{ units.meter, units.second }),
+        @constCast(&[_]unit.Unit{ unit.meter, unit.second }),
     );
     try testing.expectEqual(@sizeOf(t2), 0);
     try testing.expectEqual(@typeInfo(t2).@"struct".is_tuple, true);
     try testing.expectEqual(@typeInfo(t2).@"struct".fields.len, 2);
-    try testing.expectEqual(@typeInfo(t2).@"struct".fields[0].type, units.Unit);
+    try testing.expectEqual(@typeInfo(t2).@"struct".fields[0].type, unit.Unit);
     try testing.expectEqual(@typeInfo(t2).@"struct".fields[0].name, "0");
     try testing.expectEqual(@typeInfo(t2).@"struct".fields[0].is_comptime, true);
-    try testing.expectEqual(@typeInfo(t2).@"struct".fields[1].type, units.Unit);
+    try testing.expectEqual(@typeInfo(t2).@"struct".fields[1].type, unit.Unit);
     try testing.expectEqual(@typeInfo(t2).@"struct".fields[1].name, "1");
     try testing.expectEqual(@typeInfo(t2).@"struct".fields[1].is_comptime, true);
 }
 
 test "struct to array" {
     const v1 = comptime structTypeToArray(@TypeOf(.{}));
-    try testing.expectEqual(@TypeOf(v1), [0]units.Unit);
+    try testing.expectEqual(@TypeOf(v1), [0]unit.Unit);
     try testing.expectEqual(v1.len, 0);
 
     const v2 = comptime structTypeToArray(@TypeOf(.{
-        units.Unit{ .name = "test", .base = 10, .exp = 3 },
+        unit.Unit{ .name = "test", .base = 10, .exp = 3 },
     }));
-    try testing.expectEqual(@TypeOf(v2), [1]units.Unit);
+    try testing.expectEqual(@TypeOf(v2), [1]unit.Unit);
     try testing.expectEqual(v2.len, 1);
     try testing.expectEqual(v2[0].name, "test");
     try testing.expectEqual(v2[0].base, 10);
     try testing.expectEqual(v2[0].exp, 3);
 
     const v3 = comptime structTypeToArray(@TypeOf(.{
-        units.Unit{ .name = "test", .base = 10, .exp = 3 },
-        units.Unit{ .name = "test2", .base = 11, .exp = 4 },
+        unit.Unit{ .name = "test", .base = 10, .exp = 3 },
+        unit.Unit{ .name = "test2", .base = 11, .exp = 4 },
     }));
-    try testing.expectEqual(@TypeOf(v3), [2]units.Unit);
+    try testing.expectEqual(@TypeOf(v3), [2]unit.Unit);
     try testing.expectEqual(v3.len, 2);
     try testing.expectEqual(v3[0].name, "test");
     try testing.expectEqual(v3[0].base, 10);
@@ -297,10 +316,10 @@ test "struct to array" {
     try testing.expectEqual(v3[1].exp, 4);
 
     const v4 = comptime structTypeToArray(@TypeOf(.{
-        units.Unit{ .name = "b", .base = 10, .exp = 3 },
-        units.Unit{ .name = "a", .base = 11, .exp = 4 },
+        unit.Unit{ .name = "b", .base = 10, .exp = 3 },
+        unit.Unit{ .name = "a", .base = 11, .exp = 4 },
     }));
-    try testing.expectEqual(@TypeOf(v4), [2]units.Unit);
+    try testing.expectEqual(@TypeOf(v4), [2]unit.Unit);
     try testing.expectEqual(v4.len, 2);
     try testing.expectEqual(v4[0].name, "a");
     try testing.expectEqual(v4[0].base, 11);
@@ -309,17 +328,17 @@ test "struct to array" {
     try testing.expectEqual(v4[1].base, 10);
     try testing.expectEqual(v4[1].exp, 3);
 
-    // Compile error - type of @"0" is not units.Unit
+    // Compile error - type of @"0" is not unit.Unit
     // const v5 = comptime structTypeToArray(@TypeOf(.{
     //     "test",
-    //     units.Unit{ .name = "test", .units = 10, .exp = 3 },
+    //     unit.Unit{ .name = "test", .unit = 10, .exp = 3 },
     // }));
     // _ = v5;
 
     // Compile error - non-tuple argument
-    // const v6 = comptime structTypeToArray(@TypeOf(units.Unit{
+    // const v6 = comptime structTypeToArray(@TypeOf(unit.Unit{
     //     .name = "test",
-    //     .units = 10,
+    //     .unit = 10,
     //     .exp = 3,
     // }));
     // _ = v6;
@@ -333,32 +352,102 @@ test "struct to array" {
     // _ = v8;
 }
 
+test "format" {
+    const f1 = comptime format(Meter);
+    try testing.expectEqualStrings(f1, "m*10^1");
+
+    const f2 = comptime format(Newton);
+    try testing.expectEqualStrings(f2, "g*10^3 m*10^1 s*10^-2");
+}
+
+test "sort units" {
+    const l1 = comptime sortUnits(&[_]unit.Unit{ unit.meter, unit.second });
+    try testing.expectEqualSlices(
+        unit.Unit,
+        &[_]unit.Unit{ unit.meter, unit.second },
+        &l1,
+    );
+
+    const l2 = comptime sortUnits(&[_]unit.Unit{ unit.second, unit.meter });
+    try testing.expectEqualSlices(
+        unit.Unit,
+        &[_]unit.Unit{ unit.meter, unit.second },
+        &l2,
+    );
+
+    const l3 = comptime sortUnits(&[_]unit.Unit{
+        unit.second,
+        unit.meter,
+        .{
+            .name = unit.meter.name,
+            .base = unit.meter.base + 1,
+            .exp = unit.meter.exp,
+        },
+    });
+    try testing.expectEqualSlices(
+        unit.Unit,
+        &[_]unit.Unit{
+            unit.meter,
+            .{
+                .name = unit.meter.name,
+                .base = unit.meter.base + 1,
+                .exp = unit.meter.exp,
+            },
+            unit.second,
+        },
+        &l3,
+    );
+
+    const l4 = comptime sortUnits(&[_]unit.Unit{
+        unit.second,
+        .{
+            .name = unit.meter.name,
+            .base = unit.meter.base + 1,
+            .exp = unit.meter.exp,
+        },
+        unit.meter,
+    });
+    try testing.expectEqualSlices(
+        unit.Unit,
+        &[_]unit.Unit{
+            unit.meter,
+            .{
+                .name = unit.meter.name,
+                .base = unit.meter.base + 1,
+                .exp = unit.meter.exp,
+            },
+            unit.second,
+        },
+        &l4,
+    );
+}
+
 test "simplify units" {
-    const t1 = comptime simplifyUnits(@constCast(&[_]units.Unit{units.meter}));
-    try testing.expectEqual(t1, [1]units.Unit{units.meter});
+    const t1 = comptime simplifyUnits(@constCast(&[_]unit.Unit{unit.meter}));
+    try testing.expectEqual(t1, [1]unit.Unit{unit.meter});
 
     const t2 = comptime simplifyUnits(@constCast(
-        &[_]units.Unit{ units.meter, units.second },
+        &[_]unit.Unit{ unit.meter, unit.second },
     ));
-    try testing.expectEqual(t2, [2]units.Unit{ units.meter, units.second });
+    try testing.expectEqual(t2, [2]unit.Unit{ unit.meter, unit.second });
 
     const t3 = comptime simplifyUnits(@constCast(
-        &[_]units.Unit{ units.meter, units.meter },
+        &[_]unit.Unit{ unit.meter, unit.meter },
     ));
-    try testing.expectEqual(t3, [1]units.Unit{
-        .{ .name = units.meter.name, .base = units.meter.base, .exp = 2 },
+    try testing.expectEqual(t3, [1]unit.Unit{
+        .{ .name = unit.meter.name, .base = unit.meter.base, .exp = 2 },
     });
 
-    const t4 = comptime simplifyUnits(@constCast(&[_]units.Unit{
-        .{ .name = units.meter.name, .base = units.meter.base, .exp = 1 },
-        .{ .name = units.meter.name, .base = units.meter.base, .exp = -1 },
+    const t4 = comptime simplifyUnits(@constCast(&[_]unit.Unit{
+        .{ .name = unit.meter.name, .base = unit.meter.base, .exp = 1 },
+        .{ .name = unit.meter.name, .base = unit.meter.base, .exp = -1 },
     }));
-    try testing.expectEqual(t4, [0]units.Unit{});
+    try testing.expectEqual(t4, [0]unit.Unit{});
 
     // Compile error - same unit different unitss
-    // const t5 = comptime simplifyUnits(@constCast(&[_]units.Unit{
+    // const t5 = comptime simplifyUnits(@constCast(&[_]unit.Unit{
     //     meter,
-    //     .{ .name = meter.name, .units = meter.units + 1, .exp = 1 },
+    //     .{ .name = meter.name, .unit = meter.unit + 1, .exp = 1 },
     // }));
     // _ = t5;
 }
@@ -373,27 +462,27 @@ test "match" {
     // comptime match(Meter, Second);
 
     comptime match(Newton, Newton);
-    comptime match(Newton, Compose(&[_]units.Unit{
-        units.kilogram, units.meter, units.Scale(units.second, -2),
+    comptime match(Newton, Compose(&[_]unit.Unit{
+        unit.kilogram, unit.meter, unit.scale(unit.second, -2),
     }));
 
     // Compile error - units do not match
-    // comptime match(Newton, Compose(&[_]units.Unit{
-    //     units.Scale(units.kilogram, 2),
-    //     units.meter,
-    //     units.Scale(units.second, -2),
+    // comptime match(Newton, Compose(&[_]unit.Unit{
+    //     unit.scale(unit.kilogram, 2),
+    //     unit.meter,
+    //     unit.scale(unit.second, -2),
     // }));
 }
 
 test "Compose" {
-    const t1 = Compose(&[_]units.Unit{ units.meter, units.second });
-    const t2 = Compose(&[_]units.Unit{ units.second, units.meter });
-    const t3 = Compose(&[_]units.Unit{ units.meter, units.meter });
-    const t4 = Compose(&[_]units.Unit{ units.meter, units.second });
+    const t1 = Compose(&[_]unit.Unit{ unit.meter, unit.second });
+    const t2 = Compose(&[_]unit.Unit{ unit.second, unit.meter });
+    const t3 = Compose(&[_]unit.Unit{ unit.meter, unit.meter });
+    const t4 = Compose(&[_]unit.Unit{ unit.meter, unit.second });
     const t5 = Compose(
-        &[_]units.Unit{
-            units.meter,
-            units.Unit{
+        &[_]unit.Unit{
+            unit.meter,
+            unit.Unit{
                 .name = "s",
                 .base = 10,
                 .exp = 1,
@@ -415,46 +504,46 @@ test "Compose" {
     try testing.expectEqual(t2 == t3, false);
     try testing.expectEqual(t1, t4);
     try testing.expectEqual(t1, t5);
-    try testing.expectEqual(Meter, Compose(&[_]units.Unit{units.meter}));
-    try testing.expectEqual(t1, Compose(&[_]units.Unit{
-        units.meter,
-        units.second,
+    try testing.expectEqual(Meter, Compose(&[_]unit.Unit{unit.meter}));
+    try testing.expectEqual(t1, Compose(&[_]unit.Unit{
+        unit.meter,
+        unit.second,
     }));
     try testing.expectEqual(
-        Meter == Compose(&[_]units.Unit{ units.meter, units.second }),
+        Meter == Compose(&[_]unit.Unit{ unit.meter, unit.second }),
         false,
     );
     try testing.expectEqual(
-        Meter == Compose(&[_]units.Unit{ units.meter, units.meter }),
+        Meter == Compose(&[_]unit.Unit{ unit.meter, unit.meter }),
         false,
     );
     try testing.expectEqual(
-        Compose(&[_]units.Unit{
-            units.meter,
-            units.second,
-        }) == Compose(&[_]units.Unit{
-            units.meter,
-            units.meter,
+        Compose(&[_]unit.Unit{
+            unit.meter,
+            unit.second,
+        }) == Compose(&[_]unit.Unit{
+            unit.meter,
+            unit.meter,
         }),
         false,
     );
 }
 
 test "Extend" {
-    const t1 = Compose(&[_]units.Unit{ units.meter, units.second });
-    const t2 = Compose(&[_]units.Unit{units.meter});
-    const t3 = Extend(t2, &[_]units.Unit{units.second});
-    const t4 = Extend(t2, &[_]units.Unit{units.meter});
+    const t1 = Compose(&[_]unit.Unit{ unit.meter, unit.second });
+    const t2 = Compose(&[_]unit.Unit{unit.meter});
+    const t3 = Extend(t2, &[_]unit.Unit{unit.second});
+    const t4 = Extend(t2, &[_]unit.Unit{unit.meter});
 
     try testing.expectEqual(t1, t3);
     try testing.expectEqual(t1 == t4, false);
 
-    const t5 = Extend(Kilogram, &[_]units.Unit{
-        units.Scale(units.second, -2),
-        units.meter,
+    const t5 = Extend(Kilogram, &[_]unit.Unit{
+        unit.scale(unit.second, -2),
+        unit.meter,
     });
     try testing.expectEqual(Newton, t5);
 
-    const t6 = Extend(t5, &[_]units.Unit{units.Scale(units.second, 2)});
+    const t6 = Extend(t5, &[_]unit.Unit{unit.scale(unit.second, 2)});
     try testing.expectEqual(Newton == t6, false);
 }

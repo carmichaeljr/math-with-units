@@ -40,7 +40,11 @@ test "fuzz example" {
     try std.testing.fuzz(Context{}, Context.testOne, .{});
 }
 
+test "temporary" {
+    _ = @import("cpu.zig");
+}
+
 const std = @import("std");
 
 /// This imports the separate module containing `root.zig`. Take a look in `build.zig` for details.
-const lib = @import("zig_units_lib");
+const lib = @import("math-with-units");
