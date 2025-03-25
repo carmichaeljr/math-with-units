@@ -41,7 +41,7 @@ test "fuzz example" {
 }
 
 test "temporary" {
-    _ = @import("cpu.zig");
+    _ = @import("benchCPU.zig");
 }
 
 const std = @import("std");

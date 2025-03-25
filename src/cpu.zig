@@ -1,4 +1,3 @@
-const std = @import("std");
 const mem = @import("std").mem;
 const assert = @import("std").debug.assert;
 
@@ -9,7 +8,6 @@ const dims = @import("./dimensions.zig");
 
 const testing = @import("std").testing;
 const debug = @import("std").debug;
-const zbench = @import("zbench");
 
 pub fn add(l: anytype, r: anytype) @TypeOf(l) {
     // TODO - what about pointer values??? - might not need to since zig does one level auto pointer de-ref
@@ -21,6 +19,10 @@ pub fn add(l: anytype, r: anytype) @TypeOf(l) {
 
     switch (@typeInfo(@TypeOf(l.value))) {
         inline .int, .float => return @TypeOf(l){ .value = l.value + r.value },
+        // inline .int, .float => switch (@typeInfo(@TypeOf(l))) {
+        //     .pointer => |info| return info.child{ .value = l.value + r.value },
+        //     else => return @TypeOf(l){ .value = l.value + r.value },
+        // },
         .array => |_| {
             // TODO - SIMD???? - must use conditional compilation for benchmarks
 
@@ -46,7 +48,7 @@ pub fn add(l: anytype, r: anytype) @TypeOf(l) {
             }
             return rv;
         },
-        else => quantity.valueTypeCompileError(@TypeOf(l.value)),
+        else => @compileError("TODO"),
     }
 }
 
@@ -79,6 +81,9 @@ test "add" {
     );
     try testing.expectEqual(@sizeOf(@TypeOf(m6)), 1 * 2 * 3);
 
+    // const m7 = add(&m1, &m2);
+    // _ = m7;
+
     // _ = add(m1, m5);
 
     // _ = add(
@@ -94,59 +99,4 @@ test "add" {
     //     .underlyingType = u8,
     //     .dims = dim.Compose(&[_]unit.Unit{unit.kilo(unit.meter)}),
     // });
-}
-
-fn addScalars(_: mem.Allocator) void {
-    const m1 = quantity.Meter(u8, 3);
-    const m2 = quantity.Meter(u8, 5);
-    const m3 = add(m1, m2);
-    _ = m3;
-}
-fn AddVectorBenchmark(comptime len: u64) type {
-    return struct {
-        v1: quantity.Quantity([len]u64, dims.fill([len]type, dim.Meter)),
-        v2: quantity.Quantity([len]u64, dims.fill([len]type, dim.Meter)),
-
-        fn init() @This() {
-            var vals1: [len]u64 = undefined;
-            var vals2: [len]u64 = undefined;
-            for (0..len) |i| {
-                vals1[i] = i;
-                vals2[i] = i + len;
-            }
-
-            return .{
-                .v1 = quantity.Meter([len]u64, vals1),
-                .v2 = quantity.Meter([len]u64, vals2),
-            };
-        }
-
-        pub fn run(self: @This(), _: mem.Allocator) void {
-            const v3 = add(self.v1, self.v2);
-            _ = v3;
-        }
-    };
-}
-
-test "bench add" {
-    var tmp = try std.fs.cwd().createFile(
-        "junk_file2.txt",
-        .{ .read = true },
-    );
-    defer tmp.close();
-
-    const stdout = tmp.writer();
-
-    var bench = zbench.Benchmark.init(testing.allocator, .{});
-    defer bench.deinit();
-
-    try bench.add("scalar add", addScalars, .{});
-    try bench.addParam("vector add 4", &AddVectorBenchmark(4).init(), .{});
-    try bench.addParam("vector add 8", &AddVectorBenchmark(8).init(), .{});
-    try bench.addParam("vector add 16", &AddVectorBenchmark(16).init(), .{});
-    try bench.addParam("vector add 32", &AddVectorBenchmark(32).init(), .{});
-    try bench.addParam("vector add 64", &AddVectorBenchmark(64).init(), .{});
-    try bench.addParam("vector add 128", &AddVectorBenchmark(128).init(), .{});
-
-    try bench.run(stdout);
 }
